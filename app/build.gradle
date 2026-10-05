@@ -10,14 +10,40 @@ android {
         applicationId 'at.macrodeck.app'
         minSdk 28
         targetSdk 36
-        versionCode 4
-        versionName '1.2.0'
+        versionCode 5
+        versionName '1.2.1'
+    }
+
+    signingConfigs {
+        release {
+            def keystorePath = System.getenv('MACRODECK_KEYSTORE_PATH')
+            def keystorePassword = System.getenv('MACRODECK_KEYSTORE_PASSWORD')
+            def signingAlias = System.getenv('MACRODECK_KEY_ALIAS')
+            def signingPassword = System.getenv('MACRODECK_KEY_PASSWORD')
+
+            if (keystorePath && keystorePassword && signingAlias && signingPassword) {
+                storeFile file(keystorePath)
+                storePassword keystorePassword
+                keyAlias signingAlias
+                keyPassword signingPassword
+            }
+        }
     }
 
     buildTypes {
+        debug {
+            // Local/debug builds remain possible, but are NOT update-compatible
+            // with the permanently signed release APK.
+        }
+
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+
+            // The CI workflow always supplies the four signing environment values.
+            if (System.getenv('MACRODECK_KEYSTORE_PATH')) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 
