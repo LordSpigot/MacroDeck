@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">MacroDeck</string>
+    <string name="accessibility_service_description">Führt ausschließlich Makros aus, die du in MacroDeck selbst erstellt und gestartet hast.</string>
+</resources>
