@@ -1,6 +1,6 @@
 <resources>
     <color name="brand">#5B5CE2</color>
     <color name="brand_dark">#4244C7</color>
-    <color name="bg_light">#F6F7FB</color>
-    <color name="bg_dark">#101116</color>
+    <color name="bg_light">#000000</color>
+    <color name="bg_dark">#000000</color>
 </resources>

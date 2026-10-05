@@ -13,11 +13,11 @@ public final class Ui {
     private Ui() {}
 
     public static int dp(Context c, int dp) { return Math.round(dp * c.getResources().getDisplayMetrics().density); }
-    public static boolean dark(Context c) { return (c.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES; }
-    public static int bg(Context c) { return dark(c) ? Color.rgb(16,17,22) : Color.rgb(246,247,251); }
-    public static int card(Context c) { return dark(c) ? Color.rgb(30,31,39) : Color.WHITE; }
-    public static int text(Context c) { return dark(c) ? Color.rgb(245,245,248) : Color.rgb(25,27,34); }
-    public static int muted(Context c) { return dark(c) ? Color.rgb(168,170,184) : Color.rgb(104,108,122); }
+    public static boolean dark(Context c) { return true; }
+    public static int bg(Context c) { return Color.BLACK; }
+    public static int card(Context c) { return Color.rgb(14,14,14); }
+    public static int text(Context c) { return Color.rgb(248,248,250); }
+    public static int muted(Context c) { return Color.rgb(170,170,178); }
     public static int brand() { return Color.rgb(91,92,226); }
     public static int danger() { return Color.rgb(220,65,78); }
 

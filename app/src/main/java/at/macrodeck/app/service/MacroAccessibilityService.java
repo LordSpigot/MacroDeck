@@ -25,6 +25,7 @@ import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
@@ -134,9 +135,22 @@ public class MacroAccessibilityService extends AccessibilityService {
     // -------------------------------------------------------------------------
 
     public void runMacro(Macro macro) {
+        runMacro(macro, 1, 0L, true);
+    }
+
+    /**
+     * repeatCount: 1 = einmal, >1 = feste Anzahl, 0 = endlos.
+     * LAUNCH_APP wird ab dem zweiten Durchlauf immer übersprungen. Beim ersten
+     * Durchlauf wird die Ziel-App ebenfalls nicht neu geöffnet, wenn sie bereits
+     * im Vordergrund ist.
+     */
+    public void runMacro(Macro macro, int repeatCount, long repeatPauseMs, boolean avoidRelaunchIfForeground) {
+        if (macro == null || macro.steps.isEmpty()) {
+            Toast.makeText(this, "Dieses Makro enthält noch keine Schritte.", Toast.LENGTH_SHORT).show();
+            return;
+        }
         stopRecording(false);
         handler.removeCallbacksAndMessages(null);
-        clearOverlay();
         restoreRecorderBubbleAfterRun = recorderBubbleVisible;
         recorderBubbleVisible = false;
         clearOverlay();
@@ -144,7 +158,7 @@ public class MacroAccessibilityService extends AccessibilityService {
         macro.lastRun = System.currentTimeMillis();
         MacroStore.upsert(this, macro);
         showStopBubble();
-        runStep(macro.steps, 0);
+        runStep(macro.steps, 0, 0, Math.max(0, repeatCount), Math.max(0L, repeatPauseMs), avoidRelaunchIfForeground);
     }
 
     public void cancel() {
@@ -157,21 +171,48 @@ public class MacroAccessibilityService extends AccessibilityService {
         }
     }
 
-    private void runStep(List<MacroStep> steps, int index) {
-        if (cancelled || index >= steps.size()) {
-            clearOverlay();
-            if (restoreRecorderBubbleAfterRun) {
-                restoreRecorderBubbleAfterRun = false;
-                showRecorderBubble();
+    private void finishRun() {
+        clearOverlay();
+        if (restoreRecorderBubbleAfterRun) {
+            restoreRecorderBubbleAfterRun = false;
+            showRecorderBubble();
+        }
+    }
+
+    private void runStep(List<MacroStep> steps, int index, int loopIndex, int repeatCount,
+                         long repeatPauseMs, boolean avoidRelaunchIfForeground) {
+        if (cancelled) return;
+        if (index >= steps.size()) {
+            boolean repeat = repeatCount == 0 || loopIndex + 1 < repeatCount;
+            if (repeat) {
+                handler.postDelayed(
+                        () -> runStep(steps, 0, loopIndex + 1, repeatCount, repeatPauseMs, avoidRelaunchIfForeground),
+                        repeatPauseMs
+                );
+            } else {
+                finishRun();
             }
             return;
         }
 
-        MacroStep s = steps.get(index);
-        Runnable next = () -> runStep(steps, index + 1);
-        switch (s.type) {
+        MacroStep step = steps.get(index);
+        Runnable next = () -> runStep(
+                steps, index + 1, loopIndex, repeatCount, repeatPauseMs, avoidRelaunchIfForeground
+        );
+
+        switch (step.type) {
             case DELAY:
-                handler.postDelayed(next, Math.max(0, s.durationMs));
+                // Recorder-Makros enthalten direkt nach LAUNCH_APP eine kurze
+                // Start-Wartezeit. Wenn die App in diesem Loop gar nicht neu
+                // geöffnet wurde, können wir auch diese Start-Wartezeit sparen.
+                boolean startupDelayCanBeSkipped = false;
+                if (index > 0 && steps.get(index - 1).type == MacroStep.Type.LAUNCH_APP) {
+                    String previousTarget = steps.get(index - 1).text == null
+                            ? "" : steps.get(index - 1).text.trim();
+                    startupDelayCanBeSkipped = loopIndex > 0
+                            || (avoidRelaunchIfForeground && !previousTarget.isEmpty() && previousTarget.equals(currentPackage));
+                }
+                handler.postDelayed(next, startupDelayCanBeSkipped ? 20L : Math.max(0, step.durationMs));
                 break;
             case BACK:
                 performGlobalAction(GLOBAL_ACTION_BACK);
@@ -182,27 +223,34 @@ public class MacroAccessibilityService extends AccessibilityService {
                 handler.postDelayed(next, 350);
                 break;
             case LAUNCH_APP:
-                try {
-                    Intent i = getPackageManager().getLaunchIntentForPackage(s.text == null ? "" : s.text.trim());
-                    if (i != null) {
-                        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                        startActivity(i);
-                    }
-                } catch (Exception ignored) {}
-                handler.postDelayed(next, 700);
+                String target = step.text == null ? "" : step.text.trim();
+                boolean skipBecauseLoop = loopIndex > 0;
+                boolean skipBecauseAlreadyOpen = avoidRelaunchIfForeground && !target.isEmpty() && target.equals(currentPackage);
+                if (!skipBecauseLoop && !skipBecauseAlreadyOpen) {
+                    try {
+                        Intent intent = getPackageManager().getLaunchIntentForPackage(target);
+                        if (intent != null) {
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                            startActivity(intent);
+                        }
+                    } catch (Exception ignored) {}
+                    handler.postDelayed(next, 700);
+                } else {
+                    handler.postDelayed(next, 80);
+                }
                 break;
             case INPUT_TEXT:
-                inputText(s.text);
+                inputText(step.text);
                 handler.postDelayed(next, 300);
                 break;
             case TAP:
-                gesture(s.x1, s.y1, s.x1, s.y1, 80, next);
+                gesture(step.x1, step.y1, step.x1, step.y1, 80, next);
                 break;
             case LONG_PRESS:
-                gesture(s.x1, s.y1, s.x1, s.y1, Math.max(400, s.durationMs), next);
+                gesture(step.x1, step.y1, step.x1, step.y1, Math.max(400, step.durationMs), next);
                 break;
             case SWIPE:
-                gesture(s.x1, s.y1, s.x2, s.y2, Math.max(100, s.durationMs), next);
+                gesture(step.x1, step.y1, step.x2, step.y2, Math.max(100, step.durationMs), next);
                 break;
         }
     }
@@ -234,29 +282,231 @@ public class MacroAccessibilityService extends AccessibilityService {
         clearOverlay();
 
         TextView bubble = new TextView(this);
-        bubble.setText("● REC");
+        bubble.setText("⚡");
+        bubble.setContentDescription("MacroDeck Schnellmenü");
         bubble.setTextColor(Color.WHITE);
-        bubble.setTextSize(15);
+        bubble.setTextSize(23);
         bubble.setGravity(Gravity.CENTER);
-        bubble.setPadding(dp(16), dp(11), dp(16), dp(11));
-        bubble.setBackground(roundRect(0xE6D74343, 22));
+        bubble.setPadding(dp(14), dp(11), dp(14), dp(11));
+        bubble.setBackground(roundRect(0xFF111111, 24));
         bubble.setElevation(dp(10));
-        bubble.setOnClickListener(v -> startRecording());
+        bubble.setOnClickListener(v -> showQuickMenu());
         bubble.setOnLongClickListener(v -> {
             hideRecorderBubble();
-            Toast.makeText(this, "MacroDeck-Recorder ausgeblendet", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "MacroDeck ausgeblendet", Toast.LENGTH_SHORT).show();
             return true;
         });
 
-        WindowManager.LayoutParams p = accessibilityParams(
+        WindowManager.LayoutParams params = accessibilityParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
         );
-        p.gravity = Gravity.TOP | Gravity.END;
-        p.x = dp(14);
-        p.y = dp(130);
-        addOverlay(bubble, p);
+        params.gravity = Gravity.TOP | Gravity.END;
+        params.x = dp(12);
+        params.y = dp(130);
+        addOverlay(bubble, params);
+    }
+
+    private void showQuickMenu() {
+        if (recording) return;
+        recorderBubbleVisible = true;
+        clearOverlay();
+
+        LinearLayout box = overlayPanel();
+        TextView title = overlayTitle("⚡ MacroDeck");
+        box.addView(title);
+
+        TextView hint = overlayMuted("Makro direkt starten oder eine neue Aufnahme beginnen");
+        LinearLayout.LayoutParams hintLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        hintLp.topMargin = dp(2);
+        hintLp.bottomMargin = dp(10);
+        box.addView(hint, hintLp);
+
+        List<Macro> macros = MacroStore.load(this);
+        int shown = 0;
+        for (Macro macro : macros) {
+            if (!macro.enabled) continue;
+            Button macroButton = menuButton("▶  " + macro.name, 0xFF202020);
+            macroButton.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+            macroButton.setOnClickListener(v -> showRunOptions(macro));
+            box.addView(macroButton, menuLp(5));
+            shown++;
+        }
+
+        if (shown == 0) {
+            TextView empty = overlayMuted("Noch keine aktiven Makros gespeichert.");
+            box.addView(empty, menuLp(7));
+        }
+
+        Button record = menuButton("●  Neues Makro aufnehmen", 0xFFD74343);
+        record.setOnClickListener(v -> startRecording());
+        box.addView(record, menuLp(12));
+
+        Button close = menuButton("Zurück zum ⚡-Button", 0xFF202020);
+        close.setOnClickListener(v -> showRecorderBubble());
+        box.addView(close, menuLp(6));
+
+        Button hide = menuButton("MacroDeck ausblenden", 0xFF202020);
+        hide.setOnClickListener(v -> hideRecorderBubble());
+        box.addView(hide, menuLp(6));
+
+        showPanel(box);
+    }
+
+    private void showRunOptions(Macro macro) {
+        clearOverlay();
+        LinearLayout box = overlayPanel();
+        box.addView(overlayTitle(macro.name));
+
+        TextView sub = overlayMuted("Wiederholungen auswählen. Die Ziel-App wird nur beim ersten Durchlauf geöffnet – und auch dann nicht neu gestartet, wenn sie bereits vorne ist.");
+        box.addView(sub, menuLp(5));
+
+        final int[] repeatCount = {1};
+        final long[] pauseMs = {1500L};
+
+        TextView repeatLabel = overlayValue("Wiederholung: 1×");
+        box.addView(repeatLabel, menuLp(10));
+
+        LinearLayout repeatRow = new LinearLayout(this);
+        repeatRow.setOrientation(LinearLayout.HORIZONTAL);
+        repeatRow.setGravity(Gravity.CENTER_VERTICAL);
+        int[] counts = {1, 5, 10, 25, 0};
+        String[] labels = {"1×", "5×", "10×", "25×", "∞"};
+        for (int i = 0; i < counts.length; i++) {
+            final int count = counts[i];
+            Button chip = optionChip(labels[i]);
+            chip.setOnClickListener(v -> {
+                repeatCount[0] = count;
+                repeatLabel.setText("Wiederholung: " + (count == 0 ? "Endlos" : count + "×"));
+            });
+            LinearLayout.LayoutParams chipLp = new LinearLayout.LayoutParams(0, dp(44), 1f);
+            if (i > 0) chipLp.leftMargin = dp(5);
+            repeatRow.addView(chip, chipLp);
+        }
+        box.addView(repeatRow, menuLp(7));
+
+        TextView pauseLabel = overlayValue("Pause zwischen Durchläufen: 1,5 s");
+        box.addView(pauseLabel, menuLp(12));
+
+        LinearLayout pauseRow = new LinearLayout(this);
+        pauseRow.setOrientation(LinearLayout.HORIZONTAL);
+        pauseRow.setGravity(Gravity.CENTER_VERTICAL);
+        Button minus = optionChip("−");
+        Button plus = optionChip("+");
+        TextView pauseValue = overlayValue("1,5 s");
+        pauseValue.setGravity(Gravity.CENTER);
+        minus.setOnClickListener(v -> {
+            pauseMs[0] = Math.max(0L, pauseMs[0] - 500L);
+            String value = formatSeconds(pauseMs[0]);
+            pauseValue.setText(value);
+            pauseLabel.setText("Pause zwischen Durchläufen: " + value);
+        });
+        plus.setOnClickListener(v -> {
+            pauseMs[0] = Math.min(30000L, pauseMs[0] + 500L);
+            String value = formatSeconds(pauseMs[0]);
+            pauseValue.setText(value);
+            pauseLabel.setText("Pause zwischen Durchläufen: " + value);
+        });
+        pauseRow.addView(minus, new LinearLayout.LayoutParams(dp(64), dp(44)));
+        pauseRow.addView(pauseValue, new LinearLayout.LayoutParams(0, dp(44), 1f));
+        pauseRow.addView(plus, new LinearLayout.LayoutParams(dp(64), dp(44)));
+        box.addView(pauseRow, menuLp(6));
+
+        CheckBox smartLaunch = new CheckBox(this);
+        smartLaunch.setText("Ziel-App nicht neu öffnen, wenn sie bereits aktiv ist");
+        smartLaunch.setTextColor(Color.WHITE);
+        smartLaunch.setChecked(true);
+        smartLaunch.setButtonTintList(android.content.res.ColorStateList.valueOf(0xFF6C70FF));
+        box.addView(smartLaunch, menuLp(8));
+
+        Button start = menuButton("▶  Makro starten", 0xFF5B5CE2);
+        start.setOnClickListener(v -> runMacro(macro, repeatCount[0], pauseMs[0], smartLaunch.isChecked()));
+        box.addView(start, menuLp(12));
+
+        Button back = menuButton("←  Zurück", 0xFF202020);
+        back.setOnClickListener(v -> showQuickMenu());
+        box.addView(back, menuLp(6));
+
+        showPanel(box);
+    }
+
+    private LinearLayout overlayPanel() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(14), dp(16), dp(14));
+        box.setBackground(roundRect(Color.BLACK, 22));
+        box.setElevation(dp(12));
+        return box;
+    }
+
+    private TextView overlayTitle(String text) {
+        TextView view = new TextView(this);
+        view.setText(text);
+        view.setTextColor(Color.WHITE);
+        view.setTextSize(19);
+        view.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD);
+        return view;
+    }
+
+    private TextView overlayMuted(String text) {
+        TextView view = new TextView(this);
+        view.setText(text);
+        view.setTextColor(0xFFAAAAAA);
+        view.setTextSize(13);
+        return view;
+    }
+
+    private TextView overlayValue(String text) {
+        TextView view = new TextView(this);
+        view.setText(text);
+        view.setTextColor(Color.WHITE);
+        view.setTextSize(14);
+        return view;
+    }
+
+    private Button menuButton(String text, int color) {
+        Button button = new Button(this);
+        button.setText(text);
+        button.setAllCaps(false);
+        button.setTextColor(Color.WHITE);
+        button.setTextSize(14);
+        button.setGravity(Gravity.CENTER_VERTICAL);
+        button.setPadding(dp(14), 0, dp(14), 0);
+        button.setBackground(roundRect(color, 15));
+        return button;
+    }
+
+    private Button optionChip(String text) {
+        Button button = menuButton(text, 0xFF1B1B1B);
+        button.setGravity(Gravity.CENTER);
+        button.setPadding(dp(5), 0, dp(5), 0);
+        return button;
+    }
+
+    private LinearLayout.LayoutParams menuLp(int topMarginDp) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(topMarginDp);
+        return lp;
+    }
+
+    private void showPanel(View view) {
+        WindowManager.LayoutParams params = accessibilityParams(
+                dp(340),
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+        );
+        params.gravity = Gravity.TOP | Gravity.END;
+        params.x = dp(10);
+        params.y = dp(92);
+        addOverlay(view, params);
+    }
+
+    private String formatSeconds(long millis) {
+        if (millis % 1000L == 0L) return (millis / 1000L) + " s";
+        return String.format(Locale.getDefault(), "%.1f s", millis / 1000f);
     }
 
     public void hideRecorderBubble() {
@@ -321,7 +571,7 @@ public class MacroAccessibilityService extends AccessibilityService {
         status.setTextSize(13);
         status.setGravity(Gravity.CENTER);
         status.setPadding(dp(12), dp(8), dp(12), dp(8));
-        status.setBackground(roundRect(0xB51C1D23, 18));
+        status.setBackground(roundRect(0xE6000000, 18));
         FrameLayout.LayoutParams statusLp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.TOP | Gravity.CENTER_HORIZONTAL);
@@ -332,7 +582,7 @@ public class MacroAccessibilityService extends AccessibilityService {
         tools.setOrientation(LinearLayout.HORIZONTAL);
         tools.setGravity(Gravity.CENTER);
         tools.setPadding(dp(5), dp(5), dp(5), dp(5));
-        tools.setBackground(roundRect(0xD91C1D23, 20));
+        tools.setBackground(roundRect(0xF2000000, 20));
 
         Button back = recorderButton("←");
         back.setContentDescription("Zurück aufnehmen");
@@ -502,7 +752,7 @@ public class MacroAccessibilityService extends AccessibilityService {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(18), dp(16), dp(18), dp(16));
-        box.setBackground(roundRect(0xFA22242B, 20));
+        box.setBackground(roundRect(Color.BLACK, 20));
 
         TextView title = new TextView(this);
         title.setText("Text aufnehmen");
@@ -516,7 +766,7 @@ public class MacroAccessibilityService extends AccessibilityService {
         input.setHintTextColor(0xFFB4B6C0);
         input.setSingleLine(false);
         input.setMinLines(2);
-        input.setBackground(roundRect(0xFF353842, 14));
+        input.setBackground(roundRect(0xFF141414, 14));
         input.setPadding(dp(12), dp(10), dp(12), dp(10));
         LinearLayout.LayoutParams inputLp = new LinearLayout.LayoutParams(dp(300), LinearLayout.LayoutParams.WRAP_CONTENT);
         inputLp.topMargin = dp(12);
@@ -623,7 +873,7 @@ public class MacroAccessibilityService extends AccessibilityService {
         label.setTextColor(Color.WHITE);
         label.setTextSize(16);
         label.setPadding(dp(14), dp(10), dp(14), dp(10));
-        label.setBackground(roundRect(0xCC1C1D23, 18));
+        label.setBackground(roundRect(0xE6000000, 18));
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.TOP | Gravity.CENTER_HORIZONTAL);
@@ -724,7 +974,7 @@ public class MacroAccessibilityService extends AccessibilityService {
         b.setMinHeight(0);
         b.setMinimumHeight(0);
         b.setPadding(dp(12), dp(6), dp(12), dp(6));
-        b.setBackground(roundRect(0xFF3A3D47, 15));
+        b.setBackground(roundRect(0xFF1B1B1B, 15));
         return b;
     }
 

@@ -89,15 +89,15 @@ public class MainActivity extends Activity {
         rp.setMargins(0,0,0,Ui.dp(this,16));
         root.addView(recorder, rp);
 
-        recorder.addView(Ui.title(this,"2. Bildschirm-Recorder",18));
+        recorder.addView(Ui.title(this,"2. Schnellmenü & Recorder",18));
         recorderStatus = Ui.body(this,"Recorder: –",14);
         recorder.addView(recorderStatus);
         TextView recorderHint = Ui.body(this,
-                "Recorder einblenden → Ziel-App öffnen → auf ● REC tippen → deine Taps, langen Taps und Swipes ausführen → ■ STOP. Wartezeiten werden automatisch mitgespeichert.",
+                "Schnellmenü einblenden → Ziel-App öffnen → auf ⚡ tippen. Dort kannst du gespeicherte Makros direkt starten, wiederholen oder eine neue Aufnahme beginnen.",
                 13);
         recorderHint.setPadding(0,Ui.dp(this,5),0,Ui.dp(this,8));
         recorder.addView(recorderHint);
-        recorderButton = Ui.button(this,"● Recorder einblenden",0xFFD74343);
+        recorderButton = Ui.button(this,"⚡ Schnellmenü einblenden",Ui.brand());
         recorderButton.setOnClickListener(v -> toggleRecorder());
         recorder.addView(recorderButton);
 
@@ -137,13 +137,13 @@ public class MainActivity extends Activity {
             recorderStatus.setText(recording
                     ? "Recorder: Aufnahme läuft ●"
                     : bubble
-                        ? "Recorder: eingeblendet ✓"
+                        ? "Schnellmenü: eingeblendet ✓"
                         : enabled && !connected
                             ? "Recorder: Bedienungshilfe wartet auf Verbindung …"
-                            : "Recorder: ausgeblendet");
+                            : "Schnellmenü: ausgeblendet");
         }
         if (recorderButton != null) {
-            recorderButton.setText(bubble ? "Recorder ausblenden" : "● Recorder einblenden");
+            recorderButton.setText(bubble ? "Schnellmenü ausblenden" : "⚡ Schnellmenü einblenden");
             recorderButton.setEnabled(connected || !enabled);
             recorderButton.setAlpha((enabled && !connected) ? 0.55f : 1f);
         }
@@ -152,7 +152,7 @@ public class MainActivity extends Activity {
         List<Macro> macros = MacroStore.load(this);
         if (macros.isEmpty()) {
             TextView empty = Ui.body(this,
-                    "Noch keine Makros. Du kannst eines manuell erstellen oder oben den Bildschirm-Recorder verwenden.",
+                    "Noch keine Makros. Du kannst eines manuell erstellen oder über das ⚡-Schnellmenü in der Ziel-App aufnehmen.",
                     16);
             empty.setGravity(Gravity.CENTER);
             empty.setPadding(0,Ui.dp(this,56),0,0);
@@ -177,10 +177,10 @@ public class MainActivity extends Activity {
         MacroAccessibilityService s = MacroAccessibilityService.getInstance();
         if (s.isRecorderBubbleVisible()) {
             s.hideRecorderBubble();
-            Toast.makeText(this,"Recorder ausgeblendet",Toast.LENGTH_SHORT).show();
+            Toast.makeText(this,"Schnellmenü ausgeblendet",Toast.LENGTH_SHORT).show();
         } else {
             s.showRecorderBubble();
-            Toast.makeText(this,"Jetzt die Ziel-App öffnen und dort auf ● REC tippen.",Toast.LENGTH_LONG).show();
+            Toast.makeText(this,"Jetzt die Ziel-App öffnen und dort auf ⚡ tippen.",Toast.LENGTH_LONG).show();
         }
         render();
     }

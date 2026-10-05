@@ -1,13 +1,10 @@
-# MacroDeck 1.1.1
+# MacroDeck 1.2.0 – Update
 
-Hotfix für die Bedienungshilfe-Erkennung auf HyperOS/Android.
+Für ein bestehendes MacroDeck-GitHub-Repo:
 
-## Änderungen
-- Status wird jetzt aus Androids `ENABLED_ACCESSIBILITY_SERVICES` gelesen.
-- Unterscheidung zwischen „aktiviert“ und tatsächlich verbundenem AccessibilityService.
-- Automatische Rechecks nach Rückkehr aus den Bedienungshilfe-Einstellungen.
-- Sauberer Status beim Trennen des Dienstes.
-- VersionCode 3 / VersionName 1.1.1.
+1. Den enthaltenen Ordner `app/` über den vorhandenen `app/`-Ordner im Repo hochladen/ersetzen.
+2. `.github/workflows/build-apk.yml` im bestehenden Repo unverändert lassen.
+3. GitHub Actions bauen lassen.
+4. Die neue APK über die bestehende Installation installieren, damit gespeicherte Makros erhalten bleiben.
 
-## Update über bestehendes GitHub-Repo
-Den Inhalt des `app`-Ordners über den vorhandenen `app`-Ordner im Repository hochladen/ersetzen. Der bestehende GitHub-Actions-Workflow kann unverändert bleiben.
+Neu: ⚡ Schnellmenü, direkte Makro-Ausführung in der Ziel-App, 1×/5×/10×/25×/∞ Wiederholungen, einstellbare Loop-Pause, kein erneutes Öffnen der Ziel-App bei Wiederholungen und echtes AMOLED-Schwarz (#000000).
