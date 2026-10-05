@@ -1,4 +1,4 @@
 <resources>
     <string name="app_name">MacroDeck</string>
-    <string name="accessibility_service_description">Führt ausschließlich Makros aus, die du in MacroDeck selbst erstellt und gestartet hast.</string>
+    <string name="accessibility_service_description">MacroDeck zeigt auf Wunsch einen sichtbaren Recorder über anderen Apps, zeichnet nur von dir gestartete Gesten auf und führt ausschließlich von dir gespeicherte Makros aus.</string>
 </resources>

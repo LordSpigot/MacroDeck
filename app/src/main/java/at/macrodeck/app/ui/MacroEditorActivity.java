@@ -7,7 +7,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.Color;
-import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
@@ -26,7 +25,7 @@ import java.util.ArrayList;
 import at.macrodeck.app.data.MacroStore;
 import at.macrodeck.app.model.Macro;
 import at.macrodeck.app.model.MacroStep;
-import at.macrodeck.app.service.OverlayService;
+import at.macrodeck.app.service.MacroAccessibilityService;
 
 public class MacroEditorActivity extends Activity {
     private Macro macro;
@@ -37,8 +36,8 @@ public class MacroEditorActivity extends Activity {
 
     private final BroadcastReceiver captureReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
-            if (!OverlayService.BROADCAST_CAPTURED.equals(intent.getAction())) return;
-            int slot=intent.getIntExtra(OverlayService.EXTRA_SLOT,1); float x=intent.getFloatExtra("x",0), y=intent.getFloatExtra("y",0);
+            if (!MacroAccessibilityService.BROADCAST_CAPTURED.equals(intent.getAction())) return;
+            int slot=intent.getIntExtra(MacroAccessibilityService.EXTRA_SLOT,1); float x=intent.getFloatExtra("x",0), y=intent.getFloatExtra("y",0);
             if(slot==1 && x1Field!=null){x1Field.setText(String.valueOf(Math.round(x)));y1Field.setText(String.valueOf(Math.round(y)));}
             if(slot==2 && x2Field!=null){x2Field.setText(String.valueOf(Math.round(x)));y2Field.setText(String.valueOf(Math.round(y)));}
         }
@@ -48,7 +47,7 @@ public class MacroEditorActivity extends Activity {
         super.onCreate(b);
         String id=getIntent().getStringExtra("id"); macro=id==null?new Macro():MacroStore.find(this,id); if(macro==null)macro=new Macro();
         buildUi(); renderSteps();
-        IntentFilter f=new IntentFilter(OverlayService.BROADCAST_CAPTURED);
+        IntentFilter f=new IntentFilter(MacroAccessibilityService.BROADCAST_CAPTURED);
         if(Build.VERSION.SDK_INT>=33) registerReceiver(captureReceiver,f,Context.RECEIVER_NOT_EXPORTED); else registerReceiver(captureReceiver,f);
     }
     @Override protected void onDestroy(){try{unregisterReceiver(captureReceiver);}catch(Exception ignored){}super.onDestroy();}
@@ -95,6 +94,6 @@ public class MacroEditorActivity extends Activity {
     }
     private String num(float v){return String.valueOf(Math.round(v));}
     private String titleFor(MacroStep.Type t){switch(t){case TAP:return"Tippen";case LONG_PRESS:return"Langer Tap";case SWIPE:return"Wischen";case DELAY:return"Warten";case INPUT_TEXT:return"Text eingeben";case LAUNCH_APP:return"App starten";default:return t.name();}}
-    private void capture(int slot){if(!Settings.canDrawOverlays(this)){Toast.makeText(this,"Bitte zuerst „Über anderen Apps anzeigen“ erlauben.",Toast.LENGTH_LONG).show();startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:"+getPackageName())));return;}OverlayService.capture(this,slot);}
+    private void capture(int slot){if(!MacroAccessibilityService.isConnected()){Toast.makeText(this,"Bitte zuerst die MacroDeck-Bedienungshilfe aktivieren.",Toast.LENGTH_LONG).show();startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));return;}MacroAccessibilityService.getInstance().captureCoordinate(slot);}
     private void save(){String n=name.getText().toString().trim();if(n.isEmpty()){Toast.makeText(this,"Bitte einen Namen eingeben.",Toast.LENGTH_SHORT).show();return;}macro.name=n;macro.description=desc.getText().toString().trim();MacroStore.upsert(this,macro);Toast.makeText(this,"Gespeichert",Toast.LENGTH_SHORT).show();finish();}
 }
