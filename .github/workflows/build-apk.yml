@@ -1,4 +1,4 @@
-name: Build MacroDeck APK
+name: Build signed MacroDeck APK
 
 on:
   workflow_dispatch:
@@ -10,7 +10,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     permissions:
       contents: read
 
@@ -34,12 +33,38 @@ jobs:
         with:
           gradle-version: '8.13'
 
-      - name: Build MacroDeck debug APK
-        run: gradle --no-daemon :app:assembleDebug
+      - name: Restore permanent signing keystore
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.MACRODECK_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "Missing repository secret: MACRODECK_KEYSTORE_BASE64"
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/macrodeck-release.jks"
 
-      - name: Upload APK
+      - name: Build signed release APK
+        env:
+          MACRODECK_KEYSTORE_PATH: ${{ runner.temp }}/macrodeck-release.jks
+          MACRODECK_KEYSTORE_PASSWORD: ${{ secrets.MACRODECK_KEYSTORE_PASSWORD }}
+          MACRODECK_KEY_ALIAS: ${{ secrets.MACRODECK_KEY_ALIAS }}
+          MACRODECK_KEY_PASSWORD: ${{ secrets.MACRODECK_KEY_PASSWORD }}
+        run: |
+          test -n "$MACRODECK_KEYSTORE_PASSWORD" || (echo "Missing MACRODECK_KEYSTORE_PASSWORD" && exit 1)
+          test -n "$MACRODECK_KEY_ALIAS" || (echo "Missing MACRODECK_KEY_ALIAS" && exit 1)
+          test -n "$MACRODECK_KEY_PASSWORD" || (echo "Missing MACRODECK_KEY_PASSWORD" && exit 1)
+          gradle --no-daemon :app:assembleRelease
+
+      - name: Rename APK
+        shell: bash
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk MacroDeck-1.2.1.apk
+
+      - name: Upload signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: MacroDeck-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: MacroDeck-1.2.1-signed-apk
+          path: MacroDeck-1.2.1.apk
           if-no-files-found: error
+          retention-days: 30
