@@ -4,6 +4,8 @@ import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.GestureDescription;
 import android.accessibilityservice.AccessibilityService.GestureResultCallback;
 import android.content.Intent;
+import android.content.Context;
+import android.content.ComponentName;
 import android.graphics.Color;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
@@ -12,6 +14,8 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.provider.Settings;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -61,11 +65,49 @@ public class MacroAccessibilityService extends AccessibilityService {
     public static MacroAccessibilityService getInstance() { return instance; }
     public static boolean isConnected() { return instance != null; }
 
+    /**
+     * Reads Android's persisted Accessibility setting instead of relying only on
+     * the in-process service instance. HyperOS can return to the Activity before
+     * onServiceConnected() has finished, which made the old UI incorrectly show
+     * "nicht aktiviert" for a short time.
+     */
+    public static boolean isEnabled(Context context) {
+        try {
+            if (Settings.Secure.getInt(
+                    context.getContentResolver(),
+                    Settings.Secure.ACCESSIBILITY_ENABLED, 0) != 1) {
+                return false;
+            }
+
+            String services = Settings.Secure.getString(
+                    context.getContentResolver(),
+                    Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+            if (services == null || services.isEmpty()) return false;
+
+            ComponentName expected = new ComponentName(context, MacroAccessibilityService.class);
+            TextUtils.SimpleStringSplitter splitter = new TextUtils.SimpleStringSplitter(':');
+            splitter.setString(services);
+            while (splitter.hasNext()) {
+                ComponentName enabled = ComponentName.unflattenFromString(splitter.next());
+                if (expected.equals(enabled)) return true;
+            }
+        } catch (Exception ignored) {
+        }
+        return false;
+    }
+
     @Override
     public void onServiceConnected() {
         super.onServiceConnected();
         instance = this;
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+    }
+
+    @Override
+    public boolean onUnbind(Intent intent) {
+        clearOverlay();
+        if (instance == this) instance = null;
+        return super.onUnbind(intent);
     }
 
     @Override

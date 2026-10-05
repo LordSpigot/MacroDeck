@@ -4,6 +4,8 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
@@ -27,6 +29,7 @@ public class MainActivity extends Activity {
     private TextView setupStatus;
     private TextView recorderStatus;
     private Button recorderButton;
+    private final Handler uiHandler = new Handler(Looper.getMainLooper());
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -36,6 +39,15 @@ public class MainActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         render();
+        // HyperOS may reconnect an AccessibilityService a moment after returning
+        // from Settings. Refresh twice so the UI follows the real service state.
+        uiHandler.postDelayed(this::render, 400);
+        uiHandler.postDelayed(this::render, 1200);
+    }
+
+    @Override protected void onPause() {
+        uiHandler.removeCallbacksAndMessages(null);
+        super.onPause();
     }
 
     private void buildUi() {
@@ -108,16 +120,32 @@ public class MainActivity extends Activity {
     }
 
     private void render() {
+        boolean enabled = MacroAccessibilityService.isEnabled(this);
         boolean connected = MacroAccessibilityService.isConnected();
-        if (setupStatus != null) setupStatus.setText("Status: " + (connected ? "aktiv ✓" : "nicht aktiviert"));
+        if (setupStatus != null) {
+            String status = connected
+                    ? "aktiv ✓"
+                    : enabled
+                        ? "aktiviert – Dienst wird verbunden …"
+                        : "nicht aktiviert";
+            setupStatus.setText("Status: " + status);
+        }
 
         boolean bubble = connected && MacroAccessibilityService.getInstance().isRecorderBubbleVisible();
         boolean recording = connected && MacroAccessibilityService.getInstance().isRecording();
         if (recorderStatus != null) {
-            recorderStatus.setText(recording ? "Recorder: Aufnahme läuft ●" : bubble ? "Recorder: eingeblendet ✓" : "Recorder: ausgeblendet");
+            recorderStatus.setText(recording
+                    ? "Recorder: Aufnahme läuft ●"
+                    : bubble
+                        ? "Recorder: eingeblendet ✓"
+                        : enabled && !connected
+                            ? "Recorder: Bedienungshilfe wartet auf Verbindung …"
+                            : "Recorder: ausgeblendet");
         }
         if (recorderButton != null) {
             recorderButton.setText(bubble ? "Recorder ausblenden" : "● Recorder einblenden");
+            recorderButton.setEnabled(connected || !enabled);
+            recorderButton.setAlpha((enabled && !connected) ? 0.55f : 1f);
         }
 
         listBox.removeAllViews();
@@ -136,7 +164,13 @@ public class MainActivity extends Activity {
 
     private void toggleRecorder() {
         if (!MacroAccessibilityService.isConnected()) {
-            Toast.makeText(this,"Bitte zuerst die MacroDeck-Bedienungshilfe aktivieren.",Toast.LENGTH_LONG).show();
+            if (MacroAccessibilityService.isEnabled(this)) {
+                Toast.makeText(this,
+                        "Die Bedienungshilfe ist aktiviert, der Dienst wurde von Android aber noch nicht verbunden. Bitte MacroDeck in den Bedienungshilfen einmal AUS und wieder EIN schalten.",
+                        Toast.LENGTH_LONG).show();
+            } else {
+                Toast.makeText(this,"Bitte zuerst die MacroDeck-Bedienungshilfe aktivieren.",Toast.LENGTH_LONG).show();
+            }
             startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
             return;
         }
