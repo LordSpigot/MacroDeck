@@ -46,6 +46,8 @@ public class MacroAccessibilityService extends AccessibilityService {
     public static final String EXTRA_SLOT = "slot";
 
     private static MacroAccessibilityService instance;
+    private static final String PREFS_RUNTIME = "macrodeck_runtime";
+    private static final String PREF_BUBBLE_WANTED = "bubble_wanted";
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private WindowManager windowManager;
@@ -100,19 +102,54 @@ public class MacroAccessibilityService extends AccessibilityService {
     @Override
     public void onServiceConnected() {
         super.onServiceConnected();
+        attachServiceInstance();
+        restoreOverlayPreference();
+    }
+
+    private void attachServiceInstance() {
         instance = this;
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
     }
 
+    private boolean bubbleWanted() {
+        return getSharedPreferences(PREFS_RUNTIME, MODE_PRIVATE)
+                .getBoolean(PREF_BUBBLE_WANTED, false);
+    }
+
+    private void setBubbleWanted(boolean wanted) {
+        getSharedPreferences(PREFS_RUNTIME, MODE_PRIVATE)
+                .edit().putBoolean(PREF_BUBBLE_WANTED, wanted).apply();
+    }
+
+    private void restoreOverlayPreference() {
+        if (!bubbleWanted() || recording) return;
+        handler.postDelayed(() -> {
+            if (instance == this && bubbleWanted() && !recording) showRecorderBubble();
+        }, 250);
+    }
+
     @Override
     public boolean onUnbind(Intent intent) {
+        // Do NOT change Android's enabled Accessibility setting here. HyperOS may
+        // temporarily unbind the process when the task is removed or memory is
+        // reclaimed. Returning true lets the same service receive onRebind().
         clearOverlay();
         if (instance == this) instance = null;
-        return super.onUnbind(intent);
+        return true;
+    }
+
+    @Override
+    public void onRebind(Intent intent) {
+        super.onRebind(intent);
+        attachServiceInstance();
+        restoreOverlayPreference();
     }
 
     @Override
     public void onDestroy() {
+        // Overlay state is persisted separately. If Android/HyperOS later
+        // reconnects this enabled AccessibilityService, onServiceConnected()
+        // restores the requested ⚡ bubble automatically.
         clearOverlay();
         if (instance == this) instance = null;
         super.onDestroy();
@@ -278,6 +315,7 @@ public class MacroAccessibilityService extends AccessibilityService {
 
     public void showRecorderBubble() {
         if (recording) return;
+        setBubbleWanted(true);
         recorderBubbleVisible = true;
         clearOverlay();
 
@@ -510,6 +548,8 @@ public class MacroAccessibilityService extends AccessibilityService {
     }
 
     public void hideRecorderBubble() {
+        // Hiding the ⚡ UI must never disable or stop the AccessibilityService.
+        setBubbleWanted(false);
         recorderBubbleVisible = false;
         if (!recording) clearOverlay();
     }

@@ -93,7 +93,7 @@ public class MainActivity extends Activity {
         recorderStatus = Ui.body(this,"Recorder: –",14);
         recorder.addView(recorderStatus);
         TextView recorderHint = Ui.body(this,
-                "Schnellmenü einblenden → Ziel-App öffnen → auf ⚡ tippen. Dort kannst du gespeicherte Makros direkt starten, wiederholen oder eine neue Aufnahme beginnen.",
+                "Schnellmenü einblenden → Ziel-App öffnen → auf ⚡ tippen. Das Ausblenden des ⚡-Buttons beendet nur das Overlay – die Bedienungshilfe bleibt aktiv.",
                 13);
         recorderHint.setPadding(0,Ui.dp(this,5),0,Ui.dp(this,8));
         recorder.addView(recorderHint);
@@ -143,7 +143,7 @@ public class MainActivity extends Activity {
                             : "Schnellmenü: ausgeblendet");
         }
         if (recorderButton != null) {
-            recorderButton.setText(bubble ? "Schnellmenü ausblenden" : "⚡ Schnellmenü einblenden");
+            recorderButton.setText(bubble ? "⚡ ausblenden (Dienst bleibt aktiv)" : "⚡ Schnellmenü einblenden");
             recorderButton.setEnabled(connected || !enabled);
             recorderButton.setAlpha((enabled && !connected) ? 0.55f : 1f);
         }
@@ -166,18 +166,20 @@ public class MainActivity extends Activity {
         if (!MacroAccessibilityService.isConnected()) {
             if (MacroAccessibilityService.isEnabled(this)) {
                 Toast.makeText(this,
-                        "Die Bedienungshilfe ist aktiviert, der Dienst wurde von Android aber noch nicht verbunden. Bitte MacroDeck in den Bedienungshilfen einmal AUS und wieder EIN schalten.",
+                        "Die Bedienungshilfe ist weiterhin aktiviert. Android/HyperOS verbindet den Dienst gerade neu – du musst den Systemschalter nicht erneut einschalten.",
                         Toast.LENGTH_LONG).show();
+                uiHandler.postDelayed(this::render, 800);
+                uiHandler.postDelayed(this::render, 2000);
             } else {
                 Toast.makeText(this,"Bitte zuerst die MacroDeck-Bedienungshilfe aktivieren.",Toast.LENGTH_LONG).show();
+                startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
             }
-            startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
             return;
         }
         MacroAccessibilityService s = MacroAccessibilityService.getInstance();
         if (s.isRecorderBubbleVisible()) {
             s.hideRecorderBubble();
-            Toast.makeText(this,"Schnellmenü ausgeblendet",Toast.LENGTH_SHORT).show();
+            Toast.makeText(this,"⚡ ausgeblendet – Bedienungshilfe bleibt aktiv",Toast.LENGTH_SHORT).show();
         } else {
             s.showRecorderBubble();
             Toast.makeText(this,"Jetzt die Ziel-App öffnen und dort auf ⚡ tippen.",Toast.LENGTH_LONG).show();
