@@ -48,6 +48,7 @@ public class MacroAccessibilityService extends AccessibilityService {
     private static MacroAccessibilityService instance;
     private static final String PREFS_RUNTIME = "macrodeck_runtime";
     private static final String PREF_BUBBLE_WANTED = "bubble_wanted";
+    private static final String PREF_BUBBLE_MIGRATED_123 = "bubble_migrated_123";
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private WindowManager windowManager;
@@ -112,8 +113,22 @@ public class MacroAccessibilityService extends AccessibilityService {
     }
 
     private boolean bubbleWanted() {
-        return getSharedPreferences(PREFS_RUNTIME, MODE_PRIVATE)
-                .getBoolean(PREF_BUBBLE_WANTED, false);
+        android.content.SharedPreferences prefs = getSharedPreferences(PREFS_RUNTIME, MODE_PRIVATE);
+
+        // 1.2.3 one-time repair: older builds could leave bubble_wanted=false
+        // after a HyperOS/service interruption even though the accessibility
+        // service itself remained enabled. On the first 1.2.3 connection we
+        // restore the launcher once. Afterwards an explicit user hide is
+        // respected normally.
+        if (!prefs.getBoolean(PREF_BUBBLE_MIGRATED_123, false)) {
+            prefs.edit()
+                    .putBoolean(PREF_BUBBLE_MIGRATED_123, true)
+                    .putBoolean(PREF_BUBBLE_WANTED, true)
+                    .apply();
+            return true;
+        }
+
+        return prefs.getBoolean(PREF_BUBBLE_WANTED, true);
     }
 
     private void setBubbleWanted(boolean wanted) {
