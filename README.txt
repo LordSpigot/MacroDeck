@@ -1,6 +1,7 @@
-MacroDeck 1.2.1 update package
+MacroDeck 1.2.4 Update-Paket
 
-- Replace your repository app/ folder with this app/ folder.
-- Edit .github/workflows/build-apk.yml in GitHub and replace its contents with build-apk.yml.
-- Create the four GitHub repository secrets using the separate MacroDeck-1.2.1-signing.zip.
-- gitignore.txt contains the recommended .gitignore rules if you want to create/update .gitignore manually.
+Bitte README.md lesen. Die bisherige Android-Paketkennung und Signatur-Secrets
+beibehalten, um vorhandene App-Daten beim Upgrade nicht zu verlieren.
+
+Die Ausführungseinstellungen werden jetzt pro Makro dauerhaft gespeichert.
+Der GitHub-Workflow erzeugt MacroDeck-1.2.4-signed-apk.

@@ -9,10 +9,13 @@ import android.os.Looper;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -21,6 +24,7 @@ import java.util.Date;
 import java.util.List;
 
 import at.macrodeck.app.data.MacroStore;
+import at.macrodeck.app.data.RunSettingsStore;
 import at.macrodeck.app.model.Macro;
 import at.macrodeck.app.service.MacroAccessibilityService;
 
@@ -73,7 +77,7 @@ public class MainActivity extends Activity {
         setupStatus = Ui.body(this,"Status: –",14);
         setup.addView(setupStatus);
         TextView setupHint = Ui.body(this,
-                "MacroDeck nutzt den Android-Bedienungshilfedienst für Recorder-Overlays und zum Nachspielen deiner gespeicherten Gesten. Eine separate Overlay-Berechtigung ist nicht nötig.",
+                "MacroDeck nutzt den Android-Bedienungshilfedienst für Recorder-Overlays und gespeicherte Gesten. Android kann daher die Sicherheitsmeldung „Zugriffseinstellungen prüfen“ anzeigen. Die Berechtigung lässt sich jederzeit in den Systemeinstellungen entziehen.",
                 13);
         setupHint.setPadding(0,Ui.dp(this,5),0,Ui.dp(this,8));
         setup.addView(setupHint);
@@ -93,7 +97,7 @@ public class MainActivity extends Activity {
         recorderStatus = Ui.body(this,"Recorder: –",14);
         recorder.addView(recorderStatus);
         TextView recorderHint = Ui.body(this,
-                "Schnellmenü einblenden → Ziel-App öffnen → auf ⚡ tippen. Das Ausblenden des ⚡-Buttons beendet nur das Overlay – die Bedienungshilfe bleibt aktiv.",
+                "Schnellmenü einblenden → Ziel-App öffnen → auf ⚡ tippen. Einstellungen für Wiederholungen und Pausen werden pro Makro gespeichert (auch über ⋯). Ausblenden beendet nur das Overlay, nicht die Bedienungshilfe.",
                 13);
         recorderHint.setPadding(0,Ui.dp(this,5),0,Ui.dp(this,8));
         recorder.addView(recorderHint);
@@ -203,19 +207,28 @@ public class MainActivity extends Activity {
         top.addView(name,new LinearLayout.LayoutParams(0,-2,1));
         CheckBox enabled = new CheckBox(this);
         enabled.setChecked(m.enabled);
-        enabled.setOnCheckedChangeListener((b,c)->{ m.enabled=c; MacroStore.upsert(this,m); });
+        enabled.setOnCheckedChangeListener((b, checked) -> {
+            boolean previous = m.enabled;
+            m.enabled = checked;
+            if (!MacroStore.upsert(this, m)) {
+                m.enabled = previous;
+                Toast.makeText(this, "Status konnte nicht gespeichert werden", Toast.LENGTH_LONG).show();
+            }
+            render(); // keep Start button in sync with the saved enabled state
+        });
         top.addView(enabled);
         card.addView(top);
 
         if (!m.description.trim().isEmpty()) card.addView(Ui.body(this,m.description,14));
-        String meta = m.steps.size()+" Schritte" + (m.lastRun>0 ? " · zuletzt "+DateFormat.getDateTimeInstance(DateFormat.SHORT,DateFormat.SHORT).format(new Date(m.lastRun)) : "");
+        String meta = m.steps.size()+" Schritte · " + RunSettingsStore.summary(RunSettingsStore.load(this, m.id))
+                + (m.lastRun>0 ? " · zuletzt "+DateFormat.getDateTimeInstance(DateFormat.SHORT,DateFormat.SHORT).format(new Date(m.lastRun)) : "");
         card.addView(Ui.body(this,meta,13));
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
         actions.setGravity(Gravity.START);
         Button run = Ui.button(this,"▶ Start",Ui.brand());
-        run.setEnabled(m.enabled);
+        run.setEnabled(m.enabled && !m.steps.isEmpty());
         run.setOnClickListener(v->runMacro(m));
         actions.addView(run);
         Button edit = Ui.button(this,"Bearbeiten",0xFF666A78);
@@ -240,22 +253,114 @@ public class MainActivity extends Activity {
             startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
             return;
         }
-        MacroAccessibilityService.getInstance().runMacro(m);
-        Toast.makeText(this,"Makro gestartet",Toast.LENGTH_SHORT).show();
+        RunSettingsStore.Options options = RunSettingsStore.load(this, m.id);
+        if (options.repeatCount == 0) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Endlosschleife starten?")
+                    .setMessage("Dieses Makro wird so lange wiederholt, bis du auf ■ STOP tippst.")
+                    .setNegativeButton("Abbrechen", null)
+                    .setPositiveButton("Starten", (d, which) -> startMacro(m, options))
+                    .show();
+        } else {
+            startMacro(m, options);
+        }
+    }
+
+    private void startMacro(Macro m, RunSettingsStore.Options options) {
+        MacroAccessibilityService service = MacroAccessibilityService.getInstance();
+        if (service == null) return;
+        service.runMacro(m, options.repeatCount, options.pauseMs, options.avoidRelaunch);
+        Toast.makeText(this, "Makro gestartet · " + RunSettingsStore.summary(options), Toast.LENGTH_SHORT).show();
         render();
     }
 
     private void more(Macro m) {
-        new AlertDialog.Builder(this).setTitle(m.name).setItems(new String[]{"Duplizieren","Löschen"},(d,which)->{
-            if(which==0) MacroStore.upsert(this,m.copy());
+        new AlertDialog.Builder(this).setTitle(m.name).setItems(new String[]{"⚙ Ausführung einstellen","Duplizieren","Löschen"},(d,which)->{
+            if (which == 0) { showRunSettings(m); return; }
+            if(which==1) {
+                Macro copy = m.copy();
+                if (MacroStore.upsert(this, copy)) RunSettingsStore.copy(this, m.id, copy.id);
+            }
             else new AlertDialog.Builder(this)
                     .setTitle("Makro löschen?")
                     .setMessage(m.name)
                     .setNegativeButton("Abbrechen",null)
-                    .setPositiveButton("Löschen",(x,y)->{MacroStore.delete(this,m.id);render();})
+                    .setPositiveButton("Löschen",(x,y)->{
+                        if (MacroStore.delete(this,m.id)) RunSettingsStore.delete(this, m.id);
+                        else Toast.makeText(this,"Makro konnte nicht gelöscht werden",Toast.LENGTH_LONG).show();
+                        render();
+                    })
                     .show();
             render();
         }).show();
+    }
+
+    private void showRunSettings(Macro macro) {
+        RunSettingsStore.Options saved = RunSettingsStore.load(this, macro.id);
+        int[] repeats = {1, 5, 10, 25, 0};
+        String[] labels = {"1×", "5×", "10×", "25×", "∞ Endlos"};
+        int selected = 0;
+        for (int i = 0; i < repeats.length; i++) {
+            if (saved.repeatCount == repeats[i]) selected = i;
+        }
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(Ui.dp(this, 22), Ui.dp(this, 8), Ui.dp(this, 22), Ui.dp(this, 4));
+        box.addView(Ui.body(this, "Wiederholungen", 15));
+        Spinner picker = new Spinner(this);
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_dropdown_item, labels);
+        picker.setAdapter(adapter);
+        picker.setSelection(selected);
+        box.addView(picker, marginTop(7));
+
+        TextView pauseLabel = Ui.body(this, "Pause: " + formatPause(saved.pauseMs), 15);
+        box.addView(pauseLabel, marginTop(18));
+        SeekBar pause = new SeekBar(this);
+        pause.setMax(60); // 0–30 seconds in half-second increments
+        pause.setProgress((int) (saved.pauseMs / 500L));
+        pause.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                pauseLabel.setText("Pause: " + formatPause(progress * 500L));
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
+        box.addView(pause);
+
+        CheckBox smart = new CheckBox(this);
+        smart.setText("Aktive Ziel-App nicht neu öffnen");
+        smart.setTextColor(Ui.text(this));
+        smart.setChecked(saved.avoidRelaunch);
+        box.addView(smart, marginTop(12));
+
+        new AlertDialog.Builder(this)
+                .setTitle("Ausführung · " + macro.name)
+                .setView(box)
+                .setNegativeButton("Abbrechen", null)
+                .setPositiveButton("Speichern", (d, which) -> {
+                    RunSettingsStore.Options options = new RunSettingsStore.Options(
+                            repeats[picker.getSelectedItemPosition()],
+                            pause.getProgress() * 500L, smart.isChecked());
+                    if (!RunSettingsStore.save(this, macro.id, options)) {
+                        Toast.makeText(this, "Einstellungen konnten nicht gespeichert werden", Toast.LENGTH_LONG).show();
+                    }
+                    render();
+                })
+                .show();
+    }
+
+    private String formatPause(long ms) {
+        return ms % 1000L == 0
+                ? (ms / 1000L) + " s"
+                : String.format(java.util.Locale.GERMAN, "%.1f s", ms / 1000d);
+    }
+
+    private LinearLayout.LayoutParams marginTop(int dp) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+        params.topMargin = Ui.dp(this, dp);
+        return params;
     }
 
     private void openEditor(String id) {

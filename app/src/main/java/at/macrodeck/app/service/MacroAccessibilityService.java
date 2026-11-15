@@ -29,6 +29,7 @@ import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -38,6 +39,7 @@ import java.util.List;
 import java.util.Locale;
 
 import at.macrodeck.app.data.MacroStore;
+import at.macrodeck.app.data.RunSettingsStore;
 import at.macrodeck.app.model.Macro;
 import at.macrodeck.app.model.MacroStep;
 
@@ -48,7 +50,6 @@ public class MacroAccessibilityService extends AccessibilityService {
     private static MacroAccessibilityService instance;
     private static final String PREFS_RUNTIME = "macrodeck_runtime";
     private static final String PREF_BUBBLE_WANTED = "bubble_wanted";
-    private static final String PREF_BUBBLE_MIGRATED_123 = "bubble_migrated_123";
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private WindowManager windowManager;
@@ -113,27 +114,15 @@ public class MacroAccessibilityService extends AccessibilityService {
     }
 
     private boolean bubbleWanted() {
-        android.content.SharedPreferences prefs = getSharedPreferences(PREFS_RUNTIME, MODE_PRIVATE);
-
-        // 1.2.3 one-time repair: older builds could leave bubble_wanted=false
-        // after a HyperOS/service interruption even though the accessibility
-        // service itself remained enabled. On the first 1.2.3 connection we
-        // restore the launcher once. Afterwards an explicit user hide is
-        // respected normally.
-        if (!prefs.getBoolean(PREF_BUBBLE_MIGRATED_123, false)) {
-            prefs.edit()
-                    .putBoolean(PREF_BUBBLE_MIGRATED_123, true)
-                    .putBoolean(PREF_BUBBLE_WANTED, true)
-                    .apply();
-            return true;
-        }
-
-        return prefs.getBoolean(PREF_BUBBLE_WANTED, true);
+        // Do not force-enable a previously hidden bubble during app upgrades.
+        // Respect the last explicit choice, including after service reconnection.
+        return getSharedPreferences(PREFS_RUNTIME, MODE_PRIVATE)
+                .getBoolean(PREF_BUBBLE_WANTED, true);
     }
 
     private void setBubbleWanted(boolean wanted) {
         getSharedPreferences(PREFS_RUNTIME, MODE_PRIVATE)
-                .edit().putBoolean(PREF_BUBBLE_WANTED, wanted).apply();
+                .edit().putBoolean(PREF_BUBBLE_WANTED, wanted).commit();
     }
 
     private void restoreOverlayPreference() {
@@ -148,6 +137,10 @@ public class MacroAccessibilityService extends AccessibilityService {
         // Do NOT change Android's enabled Accessibility setting here. HyperOS may
         // temporarily unbind the process when the task is removed or memory is
         // reclaimed. Returning true lets the same service receive onRebind().
+        handler.removeCallbacksAndMessages(null);
+        recording = false;
+        recordingMacro = null;
+        cancelled = true;
         clearOverlay();
         if (instance == this) instance = null;
         return true;
@@ -165,6 +158,10 @@ public class MacroAccessibilityService extends AccessibilityService {
         // Overlay state is persisted separately. If Android/HyperOS later
         // reconnects this enabled AccessibilityService, onServiceConnected()
         // restores the requested ⚡ bubble automatically.
+        handler.removeCallbacksAndMessages(null);
+        recording = false;
+        recordingMacro = null;
+        cancelled = true;
         clearOverlay();
         if (instance == this) instance = null;
         super.onDestroy();
@@ -412,35 +409,58 @@ public class MacroAccessibilityService extends AccessibilityService {
         clearOverlay();
         LinearLayout box = overlayPanel();
         box.addView(overlayTitle(macro.name));
+        box.addView(overlayMuted("Diese Einstellungen werden automatisch für dieses Makro gespeichert."), menuLp(5));
 
-        TextView sub = overlayMuted("Wiederholungen auswählen. Die Ziel-App wird nur beim ersten Durchlauf geöffnet – und auch dann nicht neu gestartet, wenn sie bereits vorne ist.");
-        box.addView(sub, menuLp(5));
+        RunSettingsStore.Options saved = RunSettingsStore.load(this, macro.id);
+        final int[] repeatCount = {saved.repeatCount};
+        final long[] pauseMs = {saved.pauseMs};
 
-        final int[] repeatCount = {1};
-        final long[] pauseMs = {1500L};
+        CheckBox smartLaunch = new CheckBox(this);
+        smartLaunch.setText("Ziel-App nicht neu öffnen, wenn sie bereits aktiv ist");
+        smartLaunch.setTextColor(Color.WHITE);
+        smartLaunch.setChecked(saved.avoidRelaunch);
+        smartLaunch.setButtonTintList(android.content.res.ColorStateList.valueOf(0xFF6C70FF));
 
-        TextView repeatLabel = overlayValue("Wiederholung: 1×");
-        box.addView(repeatLabel, menuLp(10));
+        Runnable persist = () -> {
+            boolean ok = RunSettingsStore.save(this, macro.id,
+                    new RunSettingsStore.Options(repeatCount[0], pauseMs[0], smartLaunch.isChecked()));
+            if (!ok) Toast.makeText(this, "Einstellungen konnten nicht gespeichert werden", Toast.LENGTH_LONG).show();
+        };
+
+        TextView repeatLabel = overlayValue("Wiederholung: " + (repeatCount[0] == 0 ? "Endlos" : repeatCount[0] + "×"));
+        box.addView(repeatLabel, menuLp(12));
 
         LinearLayout repeatRow = new LinearLayout(this);
         repeatRow.setOrientation(LinearLayout.HORIZONTAL);
         repeatRow.setGravity(Gravity.CENTER_VERTICAL);
         int[] counts = {1, 5, 10, 25, 0};
         String[] labels = {"1×", "5×", "10×", "25×", "∞"};
+        Button[] chips = new Button[counts.length];
+        Runnable updateSelection = () -> {
+            for (int i = 0; i < counts.length; i++) {
+                boolean selected = repeatCount[0] == counts[i];
+                chips[i].setBackground(roundRect(selected ? 0xFF5B5CE2 : 0xFF292929, 13));
+                chips[i].setContentDescription(labels[i] + (selected ? " ausgewählt" : ""));
+            }
+        };
         for (int i = 0; i < counts.length; i++) {
             final int count = counts[i];
             Button chip = optionChip(labels[i]);
+            chips[i] = chip;
             chip.setOnClickListener(v -> {
                 repeatCount[0] = count;
                 repeatLabel.setText("Wiederholung: " + (count == 0 ? "Endlos" : count + "×"));
+                updateSelection.run();
+                persist.run();
             });
             LinearLayout.LayoutParams chipLp = new LinearLayout.LayoutParams(0, dp(44), 1f);
             if (i > 0) chipLp.leftMargin = dp(5);
             repeatRow.addView(chip, chipLp);
         }
+        updateSelection.run();
         box.addView(repeatRow, menuLp(7));
 
-        TextView pauseLabel = overlayValue("Pause zwischen Durchläufen: 1,5 s");
+        TextView pauseLabel = overlayValue("Pause zwischen Durchläufen: " + formatSeconds(pauseMs[0]));
         box.addView(pauseLabel, menuLp(12));
 
         LinearLayout pauseRow = new LinearLayout(this);
@@ -448,34 +468,37 @@ public class MacroAccessibilityService extends AccessibilityService {
         pauseRow.setGravity(Gravity.CENTER_VERTICAL);
         Button minus = optionChip("−");
         Button plus = optionChip("+");
-        TextView pauseValue = overlayValue("1,5 s");
+        TextView pauseValue = overlayValue(formatSeconds(pauseMs[0]));
         pauseValue.setGravity(Gravity.CENTER);
+        minus.setContentDescription("Pause um 0,5 Sekunden verringern");
+        plus.setContentDescription("Pause um 0,5 Sekunden erhöhen");
         minus.setOnClickListener(v -> {
             pauseMs[0] = Math.max(0L, pauseMs[0] - 500L);
             String value = formatSeconds(pauseMs[0]);
             pauseValue.setText(value);
             pauseLabel.setText("Pause zwischen Durchläufen: " + value);
+            persist.run();
         });
         plus.setOnClickListener(v -> {
             pauseMs[0] = Math.min(30000L, pauseMs[0] + 500L);
             String value = formatSeconds(pauseMs[0]);
             pauseValue.setText(value);
             pauseLabel.setText("Pause zwischen Durchläufen: " + value);
+            persist.run();
         });
         pauseRow.addView(minus, new LinearLayout.LayoutParams(dp(64), dp(44)));
         pauseRow.addView(pauseValue, new LinearLayout.LayoutParams(0, dp(44), 1f));
         pauseRow.addView(plus, new LinearLayout.LayoutParams(dp(64), dp(44)));
         box.addView(pauseRow, menuLp(6));
 
-        CheckBox smartLaunch = new CheckBox(this);
-        smartLaunch.setText("Ziel-App nicht neu öffnen, wenn sie bereits aktiv ist");
-        smartLaunch.setTextColor(Color.WHITE);
-        smartLaunch.setChecked(true);
-        smartLaunch.setButtonTintList(android.content.res.ColorStateList.valueOf(0xFF6C70FF));
+        smartLaunch.setOnCheckedChangeListener((v, checked) -> persist.run());
         box.addView(smartLaunch, menuLp(8));
 
         Button start = menuButton("▶  Makro starten", 0xFF5B5CE2);
-        start.setOnClickListener(v -> runMacro(macro, repeatCount[0], pauseMs[0], smartLaunch.isChecked()));
+        start.setOnClickListener(v -> {
+            persist.run();
+            runMacro(macro, repeatCount[0], pauseMs[0], smartLaunch.isChecked());
+        });
         box.addView(start, menuLp(12));
 
         Button back = menuButton("←  Zurück", 0xFF202020);
@@ -546,15 +569,26 @@ public class MacroAccessibilityService extends AccessibilityService {
     }
 
     private void showPanel(View view) {
+        // Large macro lists remain usable instead of falling off the screen.
+        ScrollView scroll = new ScrollView(this) {
+            @Override protected void onMeasure(int widthSpec, int heightSpec) {
+                int maxHeight = Math.max(dp(180),
+                        getResources().getDisplayMetrics().heightPixels - dp(140));
+                super.onMeasure(widthSpec, View.MeasureSpec.makeMeasureSpec(maxHeight, View.MeasureSpec.AT_MOST));
+            }
+        };
+        scroll.setFillViewport(false);
+        scroll.addView(view);
+        int screenWidth = getResources().getDisplayMetrics().widthPixels;
         WindowManager.LayoutParams params = accessibilityParams(
-                dp(340),
+                Math.min(dp(340), Math.max(dp(220), screenWidth - dp(20))),
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
         );
         params.gravity = Gravity.TOP | Gravity.END;
         params.x = dp(10);
         params.y = dp(92);
-        addOverlay(view, params);
+        addOverlay(scroll, params);
     }
 
     private String formatSeconds(long millis) {

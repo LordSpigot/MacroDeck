@@ -10,6 +10,7 @@ import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
+import org.json.JSONObject;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
@@ -33,6 +34,7 @@ public class MacroEditorActivity extends Activity {
     private LinearLayout stepsBox;
     private MacroStep editingStep;
     private EditText x1Field,y1Field,x2Field,y2Field;
+    private String initialState;
 
     private final BroadcastReceiver captureReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
@@ -45,17 +47,35 @@ public class MacroEditorActivity extends Activity {
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
-        String id=getIntent().getStringExtra("id"); macro=id==null?new Macro():MacroStore.find(this,id); if(macro==null)macro=new Macro();
+        String id=getIntent().getStringExtra("id");
+        macro=id==null?new Macro():MacroStore.find(this,id);
+        if (macro==null) macro=new Macro();
+        if (b != null && b.containsKey("editor_draft")) {
+            try { macro = Macro.fromJson(new JSONObject(b.getString("editor_draft"))); }
+            catch (Exception ignored) { /* keep the saved macro if the draft cannot be restored */ }
+        }
+        initialState = b != null ? b.getString("editor_initial", snapshot()) : snapshot();
         buildUi(); renderSteps();
+        if (b != null) {
+            name.setText(b.getString("editor_name", macro.name));
+            desc.setText(b.getString("editor_desc", macro.description));
+        }
         IntentFilter f=new IntentFilter(MacroAccessibilityService.BROADCAST_CAPTURED);
         if(Build.VERSION.SDK_INT>=33) registerReceiver(captureReceiver,f,Context.RECEIVER_NOT_EXPORTED); else registerReceiver(captureReceiver,f);
+    }
+    @Override protected void onSaveInstanceState(Bundle out) {
+        super.onSaveInstanceState(out);
+        out.putString("editor_draft", snapshot());
+        out.putString("editor_initial", initialState);
+        out.putString("editor_name", name.getText().toString());
+        out.putString("editor_desc", desc.getText().toString());
     }
     @Override protected void onDestroy(){try{unregisterReceiver(captureReceiver);}catch(Exception ignored){}super.onDestroy();}
 
     private void buildUi(){
         LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setBackgroundColor(Ui.bg(this));root.setPadding(Ui.dp(this,18),Ui.dp(this,16),Ui.dp(this,18),Ui.dp(this,14));
         LinearLayout bar=new LinearLayout(this);bar.setOrientation(LinearLayout.HORIZONTAL);bar.setGravity(Gravity.CENTER_VERTICAL);
-        Button back=Ui.button(this,"‹ Zurück",0xFF666A78);back.setOnClickListener(v->finish());bar.addView(back);
+        Button back=Ui.button(this,"‹ Zurück",0xFF666A78);back.setOnClickListener(v->onBackPressed());bar.addView(back);
         TextView t=Ui.title(this,"Makro bearbeiten",24);LinearLayout.LayoutParams tp=new LinearLayout.LayoutParams(0,-2,1);tp.setMargins(Ui.dp(this,12),0,0,0);bar.addView(t,tp);
         Button save=Ui.button(this,"Speichern",Ui.brand());save.setOnClickListener(v->save());bar.addView(save);root.addView(bar);
         name=field("Name",false);name.setText(macro.name);root.addView(name,marginTop(14));
@@ -95,5 +115,41 @@ public class MacroEditorActivity extends Activity {
     private String num(float v){return String.valueOf(Math.round(v));}
     private String titleFor(MacroStep.Type t){switch(t){case TAP:return"Tippen";case LONG_PRESS:return"Langer Tap";case SWIPE:return"Wischen";case DELAY:return"Warten";case INPUT_TEXT:return"Text eingeben";case LAUNCH_APP:return"App starten";default:return t.name();}}
     private void capture(int slot){if(!MacroAccessibilityService.isConnected()){Toast.makeText(this,"Bitte zuerst die MacroDeck-Bedienungshilfe aktivieren.",Toast.LENGTH_LONG).show();startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));return;}MacroAccessibilityService.getInstance().captureCoordinate(slot);}
-    private void save(){String n=name.getText().toString().trim();if(n.isEmpty()){Toast.makeText(this,"Bitte einen Namen eingeben.",Toast.LENGTH_SHORT).show();return;}macro.name=n;macro.description=desc.getText().toString().trim();MacroStore.upsert(this,macro);Toast.makeText(this,"Gespeichert",Toast.LENGTH_SHORT).show();finish();}
+    private String snapshot() {
+        try { return macro.toJson().toString(); }
+        catch (Exception ex) { return ""; }
+    }
+
+    private boolean hasUnsavedChanges() {
+        boolean fieldsChanged = !name.getText().toString().equals(macro.name)
+                || !desc.getText().toString().equals(macro.description);
+        return fieldsChanged || !snapshot().equals(initialState);
+    }
+
+    @Override public void onBackPressed() {
+        if (!hasUnsavedChanges()) { finish(); return; }
+        new AlertDialog.Builder(this)
+                .setTitle("Änderungen speichern?")
+                .setMessage("Du hast dieses Makro bearbeitet.")
+                .setNegativeButton("Weiter bearbeiten", null)
+                .setNeutralButton("Verwerfen", (d, which) -> finish())
+                .setPositiveButton("Speichern", (d, which) -> save())
+                .show();
+    }
+
+    private void save(){
+        String n = name.getText().toString().trim();
+        if (n.isEmpty()) {
+            Toast.makeText(this,"Bitte einen Namen eingeben.",Toast.LENGTH_SHORT).show();
+            return;
+        }
+        macro.name = n;
+        macro.description = desc.getText().toString().trim();
+        if (MacroStore.upsert(this, macro)) {
+            Toast.makeText(this,"Gespeichert",Toast.LENGTH_SHORT).show();
+            finish();
+        } else {
+            Toast.makeText(this,"Speichern fehlgeschlagen – bitte erneut versuchen",Toast.LENGTH_LONG).show();
+        }
+    }
 }
